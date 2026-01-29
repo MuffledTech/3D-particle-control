@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Gemini 3: Supernova Particle Engine</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Orbitron', sans-serif;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #fff;
+            z-index: 10;
+            pointer-events: none;
+            text-shadow: 0 0 5px #00f2ff;
+        }
+
+        #status-box {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+        }
+
+        #mode-display {
+            color: #00f2ff;
+            font-size: 3rem;
+            text-transform: uppercase;
+            letter-spacing: 10px;
+            transition: all 0.3s;
+        }
+
+        video {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="ui">
+        <b>[ SYSTEM V3.0 ]</b><br>
+        2-HAND VELOCITY TRACKING ACTIVE<br>
+        PINCH: SCALE | FAST SPREAD: SUPERNOVA
+    </div>
+    <div id="status-box">
+        <div id="mode-display">READY</div>
+    </div>
+    <video id="video" playsinline></video>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        let scene, camera, renderer, particles, handLandmarker;
+        let video = document.getElementById('video');
+        const particleCount = 20000;
+
+        const currentPos = new Float32Array(particleCount * 3);
+        const targetPos = new Float32Array(particleCount * 3);
+        const velocities = new Float32Array(particleCount * 3);
+
+        let lastDist = 0;
+        let explosionFactor = 0;
+
+        async function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 20;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            const geo = new THREE.BufferGeometry();
+            const cols = new Float32Array(particleCount * 3);
+            for (let i = 0; i < particleCount; i++) {
+                currentPos[i * 3] = (Math.random() - 0.5) * 50;
+                cols[i * 3] = 1; cols[i * 3 + 1] = 1; cols[i * 3 + 2] = 1;
+            }
+            geo.setAttribute('position', new THREE.BufferAttribute(currentPos, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+
+            const mat = new THREE.PointsMaterial({ size: 0.07, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true });
+            particles = new THREE.Points(geo, mat);
+            scene.add(particles);
+
+            const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm");
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`, delegate: "GPU" },
+                runningMode: "VIDEO", numHands: 2
+            });
+            startCamera();
+        }
+
+        function generateShape(mode, scale) {
+            document.getElementById('mode-display').innerText = mode;
+            for (let i = 0; i < particleCount; i++) {
+                let x, y, z;
+                const i3 = i * 3;
+                if (mode === "JUPITER") {
+                    const phi = Math.acos(-1 + (2 * i) / particleCount);
+                    const theta = Math.sqrt(particleCount * Math.PI) * phi;
+                    x = scale * Math.cos(theta) * Math.sin(phi);
+                    y = scale * Math.sin(theta) * Math.sin(phi);
+                    z = scale * Math.cos(phi);
+                    if (Math.abs(y) < scale * 0.1) { x *= 1.4; z *= 1.4; }
+                } else if (mode === "HEART") {
+                    const t = Math.random() * Math.PI * 2;
+                    x = scale * 16 * Math.pow(Math.sin(t), 3) / 16;
+                    y = scale * (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) / 16;
+                    z = (Math.random() - 0.5) * (scale * 0.2);
+                } else if (mode === "SATURN") {
+                    if (i < particleCount * 0.4) {
+                        const r = scale * 0.5;
+                        const u = Math.random(); const v = Math.random();
+                        const theta = 2 * Math.PI * u; const phi = Math.acos(2 * v - 1);
+                        x = r * Math.sin(phi) * Math.cos(theta); y = r * Math.sin(phi) * Math.sin(theta); z = r * Math.cos(phi);
+                    } else {
+                        const r = (scale * 0.7) + Math.random() * (scale * 0.5);
+                        const theta = Math.random() * Math.PI * 2;
+                        x = r * Math.cos(theta); y = (Math.random() - 0.5) * 0.1; z = r * Math.sin(theta);
+                    }
+                } else { // Fireworks
+                    const r = scale * Math.pow(Math.random(), 0.5);
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.acos(2 * Math.random() - 1);
+                    x = r * Math.sin(phi) * Math.cos(theta); y = r * Math.sin(phi) * Math.sin(theta); z = r * Math.cos(phi);
+                }
+                targetPos[i3] = x; targetPos[i3 + 1] = y; targetPos[i3 + 2] = z;
+            }
+        }
+
+        async function startCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            video.play();
+            video.addEventListener('loadeddata', animate);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            let results = handLandmarker.detectForVideo(video, performance.now());
+            const pos = particles.geometry.attributes.position.array;
+
+            if (results.landmarks && results.landmarks.length > 0) {
+                const hands = results.landmarks;
+
+                // 1. Expansion & Velocity Detection
+                const p1 = hands[0][8]; // Index tip hand 1
+                const p2 = hands.length > 1 ? hands[1][8] : hands[0][4]; // Hand 2 index OR hand 1 thumb
+                const currentDist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+
+                // Supernova trigger (high velocity spread)
+                const velocity = currentDist - lastDist;
+                if (velocity > 0.05) explosionFactor = 1.0;
+                lastDist = currentDist;
+
+                // 2. Control Mode & Scaling
+                const xPos = hands[0][0].x;
+                let mode = "";
+                if (xPos < 0.25) mode = "";
+                else if (xPos < 0.5) mode = "";
+                else if (xPos < 0.75) mode = "";
+
+                const baseScale = 8 + (currentDist * 30);
+                generateShape(mode, baseScale);
+
+                // 3. Color Shift
+                particles.material.color.setHSL(hands[0][0].y, 0.8, 0.6);
+
+                // 4. Update Physics
+                explosionFactor *= 0.95; // Decay explosion
+                for (let i = 0; i < pos.length; i++) {
+                    const noise = (Math.random() - 0.5) * explosionFactor * 20;
+                    pos[i] += (targetPos[i] - pos[i]) * 0.1 + noise;
+                }
+                particles.geometry.attributes.position.needsUpdate = true;
+            }
+            particles.rotation.y += 0.005;
+            renderer.render(scene, camera);
+        }
+
+        init();
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Gemini 3: Cosmic Hand Controller</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #0ff;
+            text-shadow: 0 0 10px #0ff;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #mode-indicator {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 1.5rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        video {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="info">
+        <b>CONTROLS:</b><br>
+        Move hand Left/Right to change Shapes<br>
+        Pinch/Spread fingers to Expand/Contract<br>
+        Move Up/Down for Color shifts
+    </div>
+    <div id="mode-indicator">Detecting Hand...</div>
+    <video id="video" playsinline></video>
+
+    <script type="importmap">
+        { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        let scene, camera, renderer, particles, handLandmarker;
+        let video = document.getElementById('video');
+        let modeIndicator = document.getElementById('mode-indicator');
+
+        const particleCount = 8000;
+        const positions = new Float32Array(particleCount * 3);
+        const originalPositions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+
+        async function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 8;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            const geometry = new THREE.BufferGeometry();
+            for (let i = 0; i < particleCount; i++) {
+                let x = (Math.random() - 0.5) * 15;
+                let y = (Math.random() - 0.5) * 15;
+                let z = (Math.random() - 0.5) * 15;
+                positions.set([x, y, z], i * 3);
+                originalPositions.set([x, y, z], i * 3);
+                colors.set([1, 1, 1], i * 3);
+            }
+
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 0.04,
+                vertexColors: true,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                opacity: 0.8
+            });
+
+            particles = new THREE.Points(geometry, material);
+            scene.add(particles);
+
+            const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm");
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`, delegate: "GPU" },
+                runningMode: "VIDEO", numHands: 1
+            });
+
+            startCamera();
+        }
+
+        async function startCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            video.play();
+            video.addEventListener('loadeddata', animate);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            let results = handLandmarker.detectForVideo(video, performance.now());
+            const posAttr = particles.geometry.attributes.position;
+            const time = Date.now() * 0.001;
+
+            if (results.landmarks && results.landmarks.length > 0) {
+                const hand = results.landmarks[0];
+                const indexTip = hand[8];
+                const thumbTip = hand[4];
+
+                // Determine Mode based on X position
+                let mode = "NEBULA";
+                if (indexTip.x < 0.33) mode = "JUPITER";
+                else if (indexTip.x > 0.66) mode = "GALAXY";
+                modeIndicator.innerText = mode;
+
+                // Control intensity by finger distance (pinch)
+                const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+                const intensity = pinchDist * 20;
+
+                for (let i = 0; i < particleCount; i++) {
+                    let ix = i * 3;
+                    let x = originalPositions[ix];
+                    let y = originalPositions[ix + 1];
+                    let z = originalPositions[ix + 2];
+
+                    if (mode === "JUPITER") {
+                        // Swirling Bands
+                        let angle = time + (i * 0.01);
+                        let radius = (i / particleCount) * 5 * intensity;
+                        posAttr.array[ix] += (Math.cos(angle) * radius - posAttr.array[ix]) * 0.1;
+                        posAttr.array[ix + 1] += (Math.sin(angle) * 0.2 * radius - posAttr.array[ix + 1]) * 0.1;
+                    }
+                    else if (mode === "GALAXY") {
+                        // Spiral arms
+                        let angle = 0.1 * i + time * 2;
+                        let r = (i / 100) * intensity;
+                        posAttr.array[ix] += (r * Math.cos(angle) - posAttr.array[ix]) * 0.1;
+                        posAttr.array[ix + 1] += (r * Math.sin(angle) - posAttr.array[ix + 1]) * 0.1;
+                    }
+                    else {
+                        // Chaotic Nebula
+                        posAttr.array[ix] += (Math.sin(time + x) * intensity - posAttr.array[ix]) * 0.05;
+                        posAttr.array[ix + 1] += (Math.cos(time + y) * intensity - posAttr.array[ix + 1]) * 0.05;
+                    }
+                }
+
+                // Color shift based on vertical hand position
+                particles.material.color.setHSL(indexTip.y, 0.7, 0.6);
+                posAttr.needsUpdate = true;
+            }
+
+            particles.rotation.y += 0.001;
+            renderer.render(scene, camera);
+        }
+
+        init();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+
+</html>
